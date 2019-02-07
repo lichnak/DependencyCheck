@@ -507,7 +507,13 @@ public class CPEAnalyzer extends AbstractAnalyzer {
                 } else {
                     addSpace = true;
                 }
-                LuceneUtils.appendEscapedLuceneQuery(sb, word);
+                if (LuceneUtils.isKeyword(word)) {
+                    sb.append("\"");
+                    LuceneUtils.appendEscapedLuceneQuery(sb, word);
+                    sb.append("\"");
+                } else {
+                    LuceneUtils.appendEscapedLuceneQuery(sb, word);
+                }
                 final String boostTerm = findBoostTerm(word, weightedText);
 
                 //The weighting is on a full phrase rather then at a term level for vendor or products
@@ -713,7 +719,9 @@ public class CPEAnalyzer extends AbstractAnalyzer {
 
         final CpeBuilder cpeBuilder = new CpeBuilder();
         Set<Cpe> cpes = cve.getCPEs(vendor, product);
-
+        if (cpes.isEmpty()) {
+            return false;
+        }
         if (dependency.getEcosystem() != null) {
             final String ecosystem = dependency.getEcosystem();
             cpes = cpes.stream().filter((c) -> {
@@ -755,9 +763,6 @@ public class CPEAnalyzer extends AbstractAnalyzer {
                         return true;
                 }
             }).collect(Collectors.toSet());
-        }
-        if (cpes.isEmpty()) {
-            return false;
         }
         DependencyVersion bestGuess = new DependencyVersion("-");
         Confidence bestGuessConf = null;
@@ -831,7 +836,7 @@ public class CPEAnalyzer extends AbstractAnalyzer {
                     final DependencyVersion dbVer = DependencyVersionUtil.parseVersion(vs.getVersion());
                     DependencyVersion dbVerUpdate = dbVer;
                     if (vs.getUpdate() != null && !vs.getUpdate().isEmpty() && !vs.getUpdate().startsWith("*") && !vs.getUpdate().startsWith("-")) {
-                        dbVerUpdate = DependencyVersionUtil.parseVersion(vs.getVersion() + '.' + vs.getUpdate());
+                        dbVerUpdate = DependencyVersionUtil.parseVersion(vs.getVersion() + '.' + vs.getUpdate(), true);
                     }
                     if (dbVer == null) { //special case, no version specified - everything is vulnerable
                         hasBroadMatch = true;
@@ -850,7 +855,7 @@ public class CPEAnalyzer extends AbstractAnalyzer {
                         bestGuess = dbVer;
                         bestGuessURL = String.format(NVD_SEARCH_URL, URLEncoder.encode(vs.getVendor(), UTF8),
                                 URLEncoder.encode(vs.getProduct(), UTF8), URLEncoder.encode(vs.getVersion(), UTF8));
-                    } else if (evVer.getVersionParts().size() <= dbVerUpdate.getVersionParts().size()
+                    } else if (dbVerUpdate != null && evVer.getVersionParts().size() <= dbVerUpdate.getVersionParts().size()
                             && evVer.matchesAtLeastThreeLevels(dbVerUpdate)) {
                         if (bestGuessConf == null || bestGuessConf.compareTo(conf) > 0) {
                             if (bestGuess.getVersionParts().size() < dbVer.getVersionParts().size()) {

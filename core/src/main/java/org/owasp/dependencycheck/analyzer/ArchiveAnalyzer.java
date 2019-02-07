@@ -24,6 +24,7 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
@@ -528,15 +529,18 @@ public class ArchiveAnalyzer extends AbstractFileTypeAnalyzer {
     private void extractArchive(ArchiveInputStream input, File destination, Engine engine) throws ArchiveExtractionException {
         ArchiveEntry entry;
         try {
-            final String destPath = destination.getCanonicalPath();
+            //final String destPath = destination.getCanonicalPath();
+            Path d = destination.toPath();
             while ((entry = input.getNextEntry()) != null) {
-                final File file = new File(destination, entry.getName());
-                if (!file.getCanonicalPath().startsWith(destPath)) {
+                //final File file = new File(destination, entry.getName());
+                Path f = d.resolve(entry.getName()).normalize();
+                if (!f.startsWith(d)) {
                     final String msg = String.format(
                             "Archive contains a file (%s) that would be extracted outside of the target directory.",
-                            file.getName());
+                            entry.getName());
                     throw new ArchiveExtractionException(msg);
                 }
+                File file = f.toFile();
                 if (entry.isDirectory()) {
                     if (!file.exists() && !file.mkdirs()) {
                         final String msg = String.format("Unable to create directory '%s'.", file.getAbsolutePath());

@@ -35,6 +35,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -718,7 +719,7 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
 
         final int classCount = classNames.size();
 
-        for (Map.Entry<String, Integer> entry : vendorIdentifiers.entrySet()) {
+        vendorIdentifiers.entrySet().forEach((entry) -> {
             final float ratio = entry.getValue() / (float) classCount;
             if (ratio > 0.5) {
                 //TODO remove weighting?
@@ -727,8 +728,8 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
                     dependency.addEvidence(EvidenceType.VENDOR, "jar", "package name", entry.getKey(), Confidence.LOW);
                 }
             }
-        }
-        for (Map.Entry<String, Integer> entry : productIdentifiers.entrySet()) {
+        });
+        productIdentifiers.entrySet().forEach((entry) -> {
             final float ratio = entry.getValue() / (float) classCount;
             if (ratio > 0.5) {
                 //todo remove weighting
@@ -737,7 +738,7 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
                     dependency.addEvidence(EvidenceType.PRODUCT, "jar", "package name", entry.getKey(), Confidence.LOW);
                 }
             }
-        }
+        });
     }
 
     /**
@@ -1072,7 +1073,7 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
      * @param dependency the dependency being analyzed
      * @return an list of fully qualified class names
      */
-    private List<ClassNameInformation> collectClassNames(Dependency dependency) {
+    protected List<ClassNameInformation> collectClassNames(Dependency dependency) {
         final List<ClassNameInformation> classNames = new ArrayList<>();
         try (JarFile jar = new JarFile(dependency.getActualFilePath())) {
             final Enumeration<JarEntry> entries = jar.entries();
@@ -1153,17 +1154,24 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
      * @param dep the dependency to add new entries too
      * @param type the type of evidence (vendor, product, or version)
      */
-    private static void addMatchingValues(List<ClassNameInformation> classes, String value, Dependency dep, EvidenceType type) {
+    protected static void addMatchingValues(List<ClassNameInformation> classes, String value, Dependency dep, EvidenceType type) {
         if (value == null || value.isEmpty() || classes == null || classes.isEmpty()) {
             return;
         }
-        final String text = value.toLowerCase();
+        HashSet<String> tested = new HashSet<>();
+        //TODO add a hashSet and only analyze any given key once.
         for (ClassNameInformation cni : classes) {
+            //classes.forEach((cni) -> {
             for (String key : cni.getPackageStructure()) {
-                final Pattern p = Pattern.compile("\b" + key + "\b");
-                if (p.matcher(text).find()) {
-                    //if (text.contains(key)) { //note, package structure elements are already lowercase.
-                    dep.addEvidence(type, "jar", "package name", key, Confidence.HIGHEST);
+                //cni.getPackageStructure().forEach((key) -> {
+                if (!tested.contains(key)) {
+                    tested.add(key);
+                    final int pos = StringUtils.indexOfIgnoreCase(value, key);
+                    if ((pos == 0 && (key.length() == value.length() || key.length() < value.length() && !Character.isLetterOrDigit(value.charAt(key.length()))))
+                            || (pos > 0 && !Character.isLetterOrDigit(value.charAt(pos - 1))
+                            && (pos + key.length() == value.length() || key.length() < value.length() && !Character.isLetterOrDigit(value.charAt(pos + key.length()))))) {
+                        dep.addEvidence(type, "jar", "package name", key, Confidence.HIGHEST);
+                    }
                 }
             }
         }
