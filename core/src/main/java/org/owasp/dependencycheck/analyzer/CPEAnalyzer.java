@@ -26,10 +26,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -54,6 +56,7 @@ import org.owasp.dependencycheck.data.lucene.LuceneUtils;
 import org.owasp.dependencycheck.data.lucene.SearchFieldAnalyzer;
 import org.owasp.dependencycheck.data.nvdcve.CveDB;
 import org.owasp.dependencycheck.data.nvdcve.DatabaseException;
+import org.owasp.dependencycheck.data.update.cpe.CpePlus;
 import org.owasp.dependencycheck.dependency.Confidence;
 import org.owasp.dependencycheck.dependency.Dependency;
 import org.owasp.dependencycheck.dependency.Evidence;
@@ -718,52 +721,13 @@ public class CPEAnalyzer extends AbstractAnalyzer {
             Confidence currentConfidence) throws UnsupportedEncodingException, AnalysisException {
 
         final CpeBuilder cpeBuilder = new CpeBuilder();
-        Set<Cpe> cpes = cve.getCPEs(vendor, product);
-        if (cpes.isEmpty()) {
+
+        Set<CpePlus> cpePlusEntries = cve.getCPEs(vendor, product);
+        Set<Cpe> cpes = filterEcosystem(dependency.getEcosystem(), cpePlusEntries);
+        if (cpes == null || cpes.isEmpty()) {
             return false;
         }
-        if (dependency.getEcosystem() != null) {
-            final String ecosystem = dependency.getEcosystem();
-            cpes = cpes.stream().filter((c) -> {
-                switch (c.getTargetSw()) {
-                    case "*":
-                        return true;
-                    case "java":
-                        return ecosystem.equals(JarAnalyzer.DEPENDENCY_ECOSYSTEM);
-                    case "asp.net":
-                        return ecosystem.equals(NugetconfAnalyzer.DEPENDENCY_ECOSYSTEM);
-                    case "jquery":
-                        return ecosystem.equals(RetireJsAnalyzer.DEPENDENCY_ECOSYSTEM);
-                    case "python":
-                        return ecosystem.equals(PythonDistributionAnalyzer.DEPENDENCY_ECOSYSTEM);
-                    case "borland_c++":
-                    case "c/c++":
-                    case "gnu_c++":
-                        return ecosystem.equals(CMakeAnalyzer.DEPENDENCY_ECOSYSTEM);
-                    case "drupal":
-                    case "joomla":
-                    case "joomla!":
-                    case "moodle":
-                    case "phpcms":
-                    case "piwigo":
-                    case "simplesamlphp":
-                    case "symfony":
-                    case "typo3":
-                        return ecosystem.equals(ComposerLockAnalyzer.DEPENDENCY_ECOSYSTEM);
-                    case "node.js":
-                    case "nodejs":
-                        return ecosystem.equals(AbstractNpmAnalyzer.NPM_DEPENDENCY_ECOSYSTEM);
-                    case "rails":
-                    case "ruby":
-                        return ecosystem.equals(RubyBundleAuditAnalyzer.DEPENDENCY_ECOSYSTEM);
-                    case "perl":
-                    case "delphi":
-                        return false;
-                    default:
-                        return true;
-                }
-            }).collect(Collectors.toSet());
-        }
+        
         DependencyVersion bestGuess = new DependencyVersion("-");
         Confidence bestGuessConf = null;
         String bestGuessURL = null;
@@ -772,7 +736,7 @@ public class CPEAnalyzer extends AbstractAnalyzer {
 
         int maxDepth = 0;
         for (Cpe cpe : cpes) {
-            final DependencyVersion dbVer = DependencyVersionUtil.parseVersion(cpe.getVersion());
+            final DependencyVersion dbVer = DependencyVersionUtil.parseVersion(cpe.getVersion(), true);
             if (dbVer != null) {
                 final int count = dbVer.getVersionParts().size();
                 if (count > maxDepth) {
@@ -782,41 +746,52 @@ public class CPEAnalyzer extends AbstractAnalyzer {
         }
 
         if (dependency.getVersion() != null && !dependency.getVersion().isEmpty()) {
-            final DependencyVersion depVersion = new DependencyVersion(dependency.getVersion());
-            if (depVersion.getVersionParts().size() > 0) {
-                cpeBuilder.part(Part.APPLICATION).vendor(vendor).product(product);
-                //Only semantic versions used in NVD and evidence may contain an update version
-                if (maxDepth == 3 && depVersion.getVersionParts().size() == 4
-                        && depVersion.getVersionParts().get(3).matches("^(v|beta|alpha|u|rc|m|20\\d\\d).*$")) {
-
-                    cpeBuilder.version(StringUtils.join(depVersion.getVersionParts().subList(0, 3), "."));
-                    //when written - no update versions in the NVD start with v### - they all strip the v off
-                    if (depVersion.getVersionParts().get(3).matches("^v\\d.*$")) {
-                        cpeBuilder.update(depVersion.getVersionParts().get(3).substring(1));
-                    } else {
-                        cpeBuilder.update(depVersion.getVersionParts().get(3));
-                    }
-                } else {
-                    cpeBuilder.version(depVersion.toString());
+            //we shouldn't always use the dependency version - in some cases this causes FP
+            boolean useDependencyVersion = true;
+            CharArraySet stopWords = SearchFieldAnalyzer.getStopWords();
+            if (dependency.getName() != null && !dependency.getName().isEmpty()) {
+                final String name = dependency.getName();
+                for (String word : product.split("\b")) {
+                    useDependencyVersion &= name.contains(word) || stopWords.contains(word);
                 }
-                try {
-                    final Cpe depCpe = cpeBuilder.build();
-                    final String url = String.format(NVD_SEARCH_URL, URLEncoder.encode(vendor, UTF8),
-                            URLEncoder.encode(product, UTF8), URLEncoder.encode(depCpe.getVersion(), UTF8));
-                    final IdentifierMatch match = new IdentifierMatch(depCpe, url, IdentifierConfidence.EXACT_MATCH, currentConfidence);
-                    collected.add(match);
-                } catch (CpeValidationException ex) {
-                    throw new AnalysisException(String.format("Unable to create a CPE for %s:%s:%s", vendor, product, bestGuess.toString()));
+            }
+
+            if (useDependencyVersion) {
+                //TODO - we need to filter this so that we only use this if something in the dependency.getName() matches the vendor/product in some way
+                final DependencyVersion depVersion = new DependencyVersion(dependency.getVersion());
+                if (depVersion.getVersionParts().size() > 0) {
+                    cpeBuilder.part(Part.APPLICATION).vendor(vendor).product(product);
+                    //Only semantic versions used in NVD and evidence may contain an update version
+                    if (maxDepth == 3 && depVersion.getVersionParts().size() == 4
+                            && depVersion.getVersionParts().get(3).matches("^(v|beta|alpha|u|rc|m|20\\d\\d).*$")) {
+                        cpeBuilder.version(StringUtils.join(depVersion.getVersionParts().subList(0, 3), "."));
+                        //when written - no update versions in the NVD start with v### - they all strip the v off
+                        if (depVersion.getVersionParts().get(3).matches("^v\\d.*$")) {
+                            cpeBuilder.update(depVersion.getVersionParts().get(3).substring(1));
+                        } else {
+                            cpeBuilder.update(depVersion.getVersionParts().get(3));
+                        }
+                    } else {
+                        cpeBuilder.version(depVersion.toString());
+                    }
+                    try {
+                        final Cpe depCpe = cpeBuilder.build();
+                        final String url = String.format(NVD_SEARCH_URL, URLEncoder.encode(vendor, UTF8),
+                                URLEncoder.encode(product, UTF8), URLEncoder.encode(depCpe.getVersion(), UTF8));
+                        final IdentifierMatch match = new IdentifierMatch(depCpe, url, IdentifierConfidence.EXACT_MATCH, currentConfidence);
+                        collected.add(match);
+                    } catch (CpeValidationException ex) {
+                        throw new AnalysisException(String.format("Unable to create a CPE for %s:%s:%s", vendor, product, bestGuess.toString()));
+                    }
                 }
             }
         }
         //TODO the following algorithm incorrectly identifies things as a lower version
         // if there lower confidence evidence when the current (highest) version number
         // is newer then anything in the NVD.
-        for (Confidence conf
-                : Confidence.values()) {
+        for (Confidence conf : Confidence.values()) {
             for (Evidence evidence : dependency.getIterator(EvidenceType.VERSION, conf)) {
-                final DependencyVersion evVer = DependencyVersionUtil.parseVersion(evidence.getValue());
+                final DependencyVersion evVer = DependencyVersionUtil.parseVersion(evidence.getValue(), true);
                 if (evVer == null) {
                     continue;
                 }
@@ -894,40 +869,56 @@ public class CPEAnalyzer extends AbstractAnalyzer {
         } catch (CpeValidationException ex) {
             throw new AnalysisException(String.format("Unable to create a CPE for %s:%s:%s", vendor, product, bestGuess.toString()));
         }
-        String url = null;
-        if (hasBroadMatch) { //if we have a broad match we can add the URL to the best guess.
-            url = String.format(NVD_SEARCH_BROAD_URL, URLEncoder.encode(vendor, "UTF-8"), URLEncoder.encode(product, "UTF-8"));
-        }
-        if (bestGuessURL
-                != null) {
-            url = bestGuessURL;
-        }
-        if (bestGuessConf
-                == null) {
-            bestGuessConf = Confidence.LOW;
-        }
-        final IdentifierMatch match = new IdentifierMatch(guessCpe, url, IdentifierConfidence.BEST_GUESS, bestGuessConf);
+        if (!"-".equals(guessCpe.getVersion())) {
+            String url = null;
+            if (hasBroadMatch) { //if we have a broad match we can add the URL to the best guess.
+                url = String.format(NVD_SEARCH_BROAD_URL, URLEncoder.encode(vendor, "UTF-8"), URLEncoder.encode(product, "UTF-8"));
+            }
+            if (bestGuessURL != null) {
+                url = bestGuessURL;
+            }
+            if (bestGuessConf == null) {
+                bestGuessConf = Confidence.LOW;
+            }
+            final IdentifierMatch match = new IdentifierMatch(guessCpe, url, IdentifierConfidence.BEST_GUESS, bestGuessConf);
 
-        collected.add(match);
-
-        Collections.sort(collected);
-        final IdentifierConfidence bestIdentifierQuality = collected.get(0).getIdentifierConfidence();
-        final Confidence bestEvidenceQuality = collected.get(0).getEvidenceConfidence();
+            collected.add(match);
+        }
         boolean identifierAdded = false;
-        for (IdentifierMatch m : collected) {
-            if (bestIdentifierQuality.equals(m.getIdentifierConfidence())
-                    && bestEvidenceQuality.equals(m.getEvidenceConfidence())) {
-                final CpeIdentifier i = m.getIdentifier();
-                if (bestIdentifierQuality == IdentifierConfidence.BEST_GUESS) {
-                    i.setConfidence(Confidence.LOW);
-                } else {
-                    i.setConfidence(bestEvidenceQuality);
-                }
-                //TODO - while this gets the job down it is slow; consider refactoring
-                dependency.addVulnerableSoftwareIdentifier(i);
-                suppression.analyze(dependency, null);
-                if (dependency.getVulnerableSoftwareIdentifiers().contains(i)) {
-                    identifierAdded = true;
+        if (!collected.isEmpty()) {
+            Collections.sort(collected);
+            final IdentifierConfidence bestIdentifierQuality = collected.get(0).getIdentifierConfidence();
+            final Confidence bestEvidenceQuality = collected.get(0).getEvidenceConfidence();
+            boolean addedNonGuess = false;
+            Confidence prevAddedConfidence = dependency.getVulnerableSoftwareIdentifiers().stream().map(id -> id.getConfidence())
+                    .min(Comparator.comparing(Enum::ordinal))
+                    .orElse(Confidence.LOW);
+
+            for (IdentifierMatch m : collected) {
+                if (bestIdentifierQuality.equals(m.getIdentifierConfidence())
+                        && bestEvidenceQuality.equals(m.getEvidenceConfidence())) {
+                    final CpeIdentifier i = m.getIdentifier();
+                    if (bestIdentifierQuality == IdentifierConfidence.BEST_GUESS) {
+                        if (addedNonGuess) {
+                            continue;
+                        }
+                        i.setConfidence(Confidence.LOW);
+                    } else {
+                        i.setConfidence(bestEvidenceQuality);
+                    }
+                    if (prevAddedConfidence.compareTo(i.getConfidence()) < 0) {
+                        continue;
+                    }
+
+                    //TODO - while this gets the job down it is slow; consider refactoring
+                    dependency.addVulnerableSoftwareIdentifier(i);
+                    suppression.analyze(dependency, null);
+                    if (dependency.getVulnerableSoftwareIdentifiers().contains(i)) {
+                        identifierAdded = true;
+                        if (!addedNonGuess && bestIdentifierQuality != IdentifierConfidence.BEST_GUESS) {
+                            addedNonGuess = true;
+                        }
+                    }
                 }
             }
         }
@@ -944,6 +935,72 @@ public class CPEAnalyzer extends AbstractAnalyzer {
     protected String getAnalyzerEnabledSettingKey() {
         return Settings.KEYS.ANALYZER_CPE_ENABLED;
 
+    }
+
+    /**
+     * Filters the given list of CPE Entries (plus ecosystem) for the given
+     * dependencies ecosystem.
+     *
+     * @param ecosystem the dependencies ecosystem
+     * @param entries the CPE Entries (plus ecosystem)
+     * @return the filtered list of CPE entries
+     */
+    private Set<Cpe> filterEcosystem(String ecosystem, Set<CpePlus> entries) {
+        if (entries == null || entries.isEmpty()) {
+            return null;
+        }
+        if (ecosystem != null) {
+            return entries.stream().filter((c) -> {
+                if (c.getEcosystem() == null) {
+                    return true;
+                }
+                switch (c.getEcosystem()) {
+                    case JarAnalyzer.DEPENDENCY_ECOSYSTEM:
+                    case "java":
+                        return ecosystem.equals(JarAnalyzer.DEPENDENCY_ECOSYSTEM);
+                    case NugetconfAnalyzer.DEPENDENCY_ECOSYSTEM:
+                    case "asp.net":
+                        return ecosystem.equals(NugetconfAnalyzer.DEPENDENCY_ECOSYSTEM);
+                    case RetireJsAnalyzer.DEPENDENCY_ECOSYSTEM:
+                    case "jquery":
+                        return ecosystem.equals(RetireJsAnalyzer.DEPENDENCY_ECOSYSTEM);
+                    case PythonDistributionAnalyzer.DEPENDENCY_ECOSYSTEM:
+                        return ecosystem.equals(PythonDistributionAnalyzer.DEPENDENCY_ECOSYSTEM);
+                    case CMakeAnalyzer.DEPENDENCY_ECOSYSTEM:
+                    case "borland_c++":
+                    case "c/c++":
+                    case "gnu_c++":
+                        return ecosystem.equals(CMakeAnalyzer.DEPENDENCY_ECOSYSTEM);
+                    case ComposerLockAnalyzer.DEPENDENCY_ECOSYSTEM:
+                    case "drupal":
+                    case "joomla":
+                    case "joomla!":
+                    case "moodle":
+                    case "phpcms":
+                    case "piwigo":
+                    case "simplesamlphp":
+                    case "symfony":
+                    case "typo3":
+                        return ecosystem.equals(ComposerLockAnalyzer.DEPENDENCY_ECOSYSTEM);
+                    case AbstractNpmAnalyzer.NPM_DEPENDENCY_ECOSYSTEM:
+                    case "node.js":
+                    case "nodejs":
+                        return ecosystem.equals(AbstractNpmAnalyzer.NPM_DEPENDENCY_ECOSYSTEM);
+                    case RubyBundleAuditAnalyzer.DEPENDENCY_ECOSYSTEM:
+                    case "rails":
+                        return ecosystem.equals(RubyBundleAuditAnalyzer.DEPENDENCY_ECOSYSTEM);
+                    case "perl":
+                    case "delphi":
+                        return false;
+                    default:
+                        return true;
+                }
+            }).map(c -> c.getCpe())
+                    .collect(Collectors.toSet());
+        }
+        return entries.stream()
+                .map(c -> c.getCpe())
+                .collect(Collectors.toSet());
     }
 
     /**

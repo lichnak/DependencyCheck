@@ -211,6 +211,36 @@ public class VulnerableSoftware extends Cpe implements Serializable {
         return result;
     }
 
+    public static boolean testMatch(ICpe left, ICpe right) {
+        boolean result = true;
+        result &= compareAttributes(left.getPart(), right.getPart());
+        result &= compareAttributes(left.getWellFormedVendor(), right.getWellFormedVendor());
+        result &= compareAttributes(left.getWellFormedProduct(), right.getWellFormedProduct());
+
+        if (right instanceof VulnerableSoftware) {
+            VulnerableSoftware vs = (VulnerableSoftware) right;
+            result &= vs.vulnerable;
+            result &= compareVersionRange(vs, left.getVersion());
+        } else if (left instanceof VulnerableSoftware) {
+            VulnerableSoftware vs = (VulnerableSoftware) left;
+            result &= vs.vulnerable;
+            result &= compareVersionRange(vs, right.getVersion());
+        } else {
+            result &= compareAttributes(left.getWellFormedVersion(), right.getWellFormedVersion());
+        }
+
+        //todo - if the vulnerablity has an update we are might not be collecting it correctly...
+        // as such, this check might cause FN if the CVE has an update in the data set
+        result &= compareAttributes(left.getWellFormedUpdate(), right.getWellFormedUpdate());
+        result &= compareAttributes(left.getWellFormedEdition(), right.getWellFormedEdition());
+        result &= compareAttributes(left.getWellFormedLanguage(), right.getWellFormedLanguage());
+        result &= compareAttributes(left.getWellFormedSwEdition(), right.getWellFormedSwEdition());
+        result &= compareAttributes(left.getWellFormedTargetSw(), right.getWellFormedTargetSw());
+        result &= compareAttributes(left.getWellFormedTargetHw(), right.getWellFormedTargetHw());
+        result &= compareAttributes(left.getWellFormedOther(), right.getWellFormedOther());
+        return result;
+    }
+    
     /**
      * <p>
      * Determines if the target VulnerableSoftware matches the
@@ -228,7 +258,7 @@ public class VulnerableSoftware extends Cpe implements Serializable {
      */
     @Override
     public boolean matchedBy(ICpe target) {
-        return target.matches(this);
+        return testMatch(target, this);
     }
 
     /**
@@ -241,16 +271,29 @@ public class VulnerableSoftware extends Cpe implements Serializable {
      * <code>false</code>
      */
     protected boolean compareVersionRange(String targetVersion) {
-        if (LogicalValue.NA.getAbbreviation().equals(this.getVersion())) {
+        return compareVersionRange(this, targetVersion);
+    }
+    /**
+     * Evaluates the target against the version and version range checks:
+     * versionEndExcluding, versionStartExcluding versionEndIncluding, and
+     * versionStartIncluding.
+     *
+     * @param vs a reference to the vulnerable software to compare
+     * @param targetVersion the version to compare
+     * @return <code>true</code> if the target version is matched; otherwise
+     * <code>false</code>
+     */
+    protected static boolean compareVersionRange(VulnerableSoftware vs, String targetVersion) {
+        if (LogicalValue.NA.getAbbreviation().equals(vs.getVersion())) {
             return false;
         }
         //if any of the four conditions will be evaluated - then true;
-        boolean result = (versionEndExcluding != null && !versionEndExcluding.isEmpty())
-                || (versionStartExcluding != null && !versionStartExcluding.isEmpty())
-                || (versionEndIncluding != null && !versionEndIncluding.isEmpty())
-                || (versionStartIncluding != null && !versionStartIncluding.isEmpty());
+        boolean result = (vs.versionEndExcluding != null && !vs.versionEndExcluding.isEmpty())
+                || (vs.versionStartExcluding != null && !vs.versionStartExcluding.isEmpty())
+                || (vs.versionEndIncluding != null && !vs.versionEndIncluding.isEmpty())
+                || (vs.versionStartIncluding != null && !vs.versionStartIncluding.isEmpty());
 
-        if (!result && compareAttributes(this.getVersion(), targetVersion)) {
+        if (!result && compareAttributes(vs.getVersion(), targetVersion)) {
             return true;
         }
 
@@ -258,20 +301,20 @@ public class VulnerableSoftware extends Cpe implements Serializable {
         if (target.getVersionParts().isEmpty()) {
             return false;
         }
-        if (result && versionEndExcluding != null && !versionEndExcluding.isEmpty()) {
-            final DependencyVersion endExcluding = new DependencyVersion(versionEndExcluding);
+        if (result && vs.versionEndExcluding != null && !vs.versionEndExcluding.isEmpty()) {
+            final DependencyVersion endExcluding = new DependencyVersion(vs.versionEndExcluding);
             result = endExcluding.compareTo(target) > 0;
         }
-        if (result && versionStartExcluding != null && !versionStartExcluding.isEmpty()) {
-            final DependencyVersion startExcluding = new DependencyVersion(versionStartExcluding);
+        if (result && vs.versionStartExcluding != null && !vs.versionStartExcluding.isEmpty()) {
+            final DependencyVersion startExcluding = new DependencyVersion(vs.versionStartExcluding);
             result = startExcluding.compareTo(target) < 0;
         }
-        if (result && versionEndIncluding != null && !versionEndIncluding.isEmpty()) {
-            final DependencyVersion endIncluding = new DependencyVersion(versionEndIncluding);
+        if (result && vs.versionEndIncluding != null && !vs.versionEndIncluding.isEmpty()) {
+            final DependencyVersion endIncluding = new DependencyVersion(vs.versionEndIncluding);
             result &= endIncluding.compareTo(target) >= 0;
         }
-        if (result && versionStartIncluding != null && !versionStartIncluding.isEmpty()) {
-            final DependencyVersion startIncluding = new DependencyVersion(versionStartIncluding);
+        if (result && vs.versionStartIncluding != null && !vs.versionStartIncluding.isEmpty()) {
+            final DependencyVersion startIncluding = new DependencyVersion(vs.versionStartIncluding);
             result &= startIncluding.compareTo(target) <= 0;
         }
         return result;

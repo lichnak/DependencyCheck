@@ -17,6 +17,7 @@
  */
 package org.owasp.dependencycheck.dependency;
 
+import us.springett.parsers.cpe.Cpe;
 import us.springett.parsers.cpe.CpeBuilder;
 import us.springett.parsers.cpe.exceptions.CpeParsingException;
 import us.springett.parsers.cpe.exceptions.CpeValidationException;
@@ -84,6 +85,21 @@ public class VulnerableSoftwareBuilder extends CpeBuilder {
         versionStartExcluding = null;
         versionStartIncluding = null;
         vulnerable = true;
+    }
+
+    /**
+     * Adds a base CPE object to build a vulnerable software object from.
+     *
+     * @param cpe the base CPE
+     * @return a reference to the builder
+     */
+    public VulnerableSoftwareBuilder cpe(Cpe cpe) {
+        this.part(cpe.getPart()).wfVendor(cpe.getWellFormedVendor()).wfProduct(cpe.getWellFormedProduct())
+                .wfVersion(cpe.getWellFormedVersion()).wfUpdate(cpe.getWellFormedUpdate())
+                .wfEdition(cpe.getWellFormedEdition()).wfLanguage(cpe.getWellFormedLanguage())
+                .wfSwEdition(cpe.getWellFormedSwEdition()).wfTargetSw(cpe.getWellFormedTargetSw())
+                .wfTargetHw(cpe.getWellFormedTargetHw()).wfOther(cpe.getWellFormedOther());
+        return this;
     }
 
     /**

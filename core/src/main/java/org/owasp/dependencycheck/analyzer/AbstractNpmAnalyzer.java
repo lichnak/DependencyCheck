@@ -282,6 +282,7 @@ public abstract class AbstractNpmAnalyzer extends AbstractFileTypeAnalyzer {
                 LOGGER.warn("JSON value not string as expected: {}", value);
             }
         }
+        //TODO - if we start doing CPE analysis on node - we need to exclude description as it creates too many FP
         final String desc = addToEvidence(dependency, EvidenceType.PRODUCT, json, "description");
         dependency.setDescription(desc);
         final String vendor = addToEvidence(dependency, EvidenceType.VENDOR, json, "author");

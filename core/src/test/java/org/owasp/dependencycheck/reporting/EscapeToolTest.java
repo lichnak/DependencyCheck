@@ -28,7 +28,7 @@ import org.owasp.dependencycheck.dependency.naming.Identifier;
 
 /**
  *
- * @author jerem
+* @author Jeremy Long
  */
 public class EscapeToolTest {
 

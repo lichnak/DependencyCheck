@@ -137,6 +137,6 @@ public final class PomUtils {
      */
     public static void analyzePOM(Dependency dependency, File pomFile) throws AnalysisException {
         final Model pom = PomUtils.readPom(pomFile);
-        JarAnalyzer.setPomEvidence(dependency, pom, null);
+        JarAnalyzer.setPomEvidence(dependency, pom, null, true);
     }
 }

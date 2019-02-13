@@ -98,19 +98,6 @@ public final class NvdCveParser {
                 if (testCveCpeStartWithFilter(cve)) {
                     cveDB.updateVulnerability(cve);
                 }
-
-                //there can be zero or more CWE - should this be a list?
-                String cwe;
-                for (ProblemtypeDatum datum : cve.getCve().getProblemtype().getProblemtypeData()) {
-                    for (Description d : datum.getDescription()) {
-                        if ("en".equals(d.getLang())) {
-                            cwe = d.getValue();
-                        }
-                    }
-                }
-                //contains the affected vendor/product/version - possibly useful for vendor/product/version matching
-                //cve.getCve().getAffects();
-
             }
         } catch (FileNotFoundException ex) {
             LOGGER.error(ex.getMessage());

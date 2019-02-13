@@ -21,12 +21,8 @@ import java.sql.SQLException;
 import org.owasp.dependencycheck.BaseDBTestCase;
 import org.owasp.dependencycheck.dependency.Vulnerability;
 import org.owasp.dependencycheck.dependency.VulnerableSoftware;
-import org.owasp.dependencycheck.utils.DependencyVersion;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
 import org.junit.After;
 import org.junit.Test;
@@ -36,6 +32,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import org.junit.Before;
+import org.owasp.dependencycheck.data.update.cpe.CpePlus;
 import org.owasp.dependencycheck.dependency.VulnerableSoftwareBuilder;
 import us.springett.parsers.cpe.Cpe;
 import us.springett.parsers.cpe.CpeBuilder;
@@ -84,7 +81,7 @@ public class CveDBIT extends BaseDBTestCase {
     public void testGetCPEs() throws Exception {
         String vendor = "apache";
         String product = "struts";
-        Set<Cpe> result = instance.getCPEs(vendor, product);
+        Set<CpePlus> result = instance.getCPEs(vendor, product);
         assertTrue(result.size() > 5);
     }
 
@@ -102,7 +99,7 @@ public class CveDBIT extends BaseDBTestCase {
      */
     @Test
     public void testGetVulnerabilities() throws Exception {
-        
+
         CpeBuilder builder = new CpeBuilder();
         Cpe cpe = builder.part(Part.APPLICATION).vendor("apache").product("struts").version("2.1.2").build();
         List<Vulnerability> results;
@@ -132,6 +129,22 @@ public class CveDBIT extends BaseDBTestCase {
             }
         }
         assertTrue("Expected " + expected + ", but was not identified", found);
+        
+        
+        cpe = builder.part(Part.APPLICATION).vendor("jenkins").product("mailer").version("1.13").build();
+        results = instance.getVulnerabilities(cpe);
+        assertTrue(results.size() >= 1);
+
+        found = false;
+        expected = "CVE-2017-2651";
+        for (Vulnerability v : results) {
+            if (expected.equals(v.getName())) {
+                found = true;
+                break;
+            }
+        }
+        assertTrue("Expected " + expected + ", but was not identified", found);
+
     }
 
     /**
@@ -182,7 +195,7 @@ public class CveDBIT extends BaseDBTestCase {
         identified = cpeBuilder.part(Part.APPLICATION).vendor("springsource").product("spring_framework").version("4.0.0").build();
         results = instance.getMatchingSoftware(identified, software);
         assertEquals("cpe:/a:springsource:spring_framework:4.0.1", results.toCpe22Uri());
-        
+
         identified = cpeBuilder.part(Part.APPLICATION).vendor("springsource").product("spring_framework").version("4.1.0").build();
         results = instance.getMatchingSoftware(identified, software);
         assertNull(results);
@@ -193,5 +206,17 @@ public class CveDBIT extends BaseDBTestCase {
         identified = cpeBuilder.part(Part.APPLICATION).vendor("springsource").product("spring_framework").version("1.6.3").build();
         results = instance.getMatchingSoftware(identified, software);
         assertNull(results);
+
+        software.clear();
+        software.add(vsBuilder.part(Part.APPLICATION).vendor("eclipse").product("jetty").update("20170531").versionEndIncluding("9.5.6").build());
+        identified = cpeBuilder.part(Part.APPLICATION).vendor("eclipse").product("jetty").version("9.0.0").build();
+        results = instance.getMatchingSoftware(identified, software);
+        assertEquals("cpe:/a:eclipse:jetty::20170531", results.toCpe22Uri());
+
+        software.clear();
+        software.add(vsBuilder.part(Part.APPLICATION).vendor("jenkins").product("mailer").versionEndExcluding("1.20").targetSw("jenkins").build());
+        identified = cpeBuilder.part(Part.APPLICATION).vendor("jenkins").product("mailer").version("1.13").build();
+        results = instance.getMatchingSoftware(identified, software);
+        assertEquals("cpe:/a:jenkins:mailer:::~~~jenkins~~", results.toCpe22Uri());
     }
 }

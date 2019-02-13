@@ -37,6 +37,14 @@ import java.util.stream.Collectors;
 
 import static org.apache.commons.collections.map.AbstractReferenceMap.HARD;
 import static org.apache.commons.collections.map.AbstractReferenceMap.SOFT;
+import org.apache.commons.lang3.StringUtils;
+import org.owasp.dependencycheck.analyzer.AbstractNpmAnalyzer;
+import org.owasp.dependencycheck.analyzer.CMakeAnalyzer;
+import org.owasp.dependencycheck.analyzer.ComposerLockAnalyzer;
+import org.owasp.dependencycheck.analyzer.JarAnalyzer;
+import org.owasp.dependencycheck.analyzer.PythonPackageAnalyzer;
+import org.owasp.dependencycheck.analyzer.RubyBundleAuditAnalyzer;
+import org.owasp.dependencycheck.analyzer.exception.LambdaExceptionWrapper;
 import org.owasp.dependencycheck.data.nvd.json.BaseMetricV2;
 import org.owasp.dependencycheck.data.nvd.json.BaseMetricV3;
 import org.owasp.dependencycheck.data.nvd.json.CVEItem;
@@ -47,6 +55,7 @@ import org.owasp.dependencycheck.data.nvd.json.NodeFlatteningCollector;
 import org.owasp.dependencycheck.data.nvd.json.ProblemtypeDatum;
 import org.owasp.dependencycheck.data.nvd.json.ReferenceDatum;
 import static org.owasp.dependencycheck.data.nvdcve.CveDB.PreparedStatementCveDb.*;
+import org.owasp.dependencycheck.data.update.cpe.CpePlus;
 import org.owasp.dependencycheck.dependency.CvssV2;
 import org.owasp.dependencycheck.dependency.CvssV3;
 import org.owasp.dependencycheck.dependency.VulnerableSoftwareBuilder;
@@ -112,6 +121,93 @@ public final class CveDB implements AutoCloseable {
      */
     private final Settings settings;
 
+    private String determineBaseEcosystem(String description) {
+        if (description == null) {
+            return null;
+        }
+        int idx = StringUtils.indexOfIgnoreCase(description, ".php");
+        if (idx > 0 && (idx + 3 == description.length() || !Character.isLetterOrDigit(description.charAt(idx + 3)))
+                || StringUtils.containsIgnoreCase(description, "wordpress")
+                || StringUtils.containsIgnoreCase(description, "drupal")
+                || StringUtils.containsIgnoreCase(description, "joomla")
+                || StringUtils.containsIgnoreCase(description, "moodle")
+                || StringUtils.containsIgnoreCase(description, "typo3")) {
+            return ComposerLockAnalyzer.DEPENDENCY_ECOSYSTEM;
+        }
+        if (StringUtils.containsIgnoreCase(description, " npm ")
+                || StringUtils.containsIgnoreCase(description, " node.js")) {
+            return AbstractNpmAnalyzer.NPM_DEPENDENCY_ECOSYSTEM;
+        }
+        idx = StringUtils.indexOfIgnoreCase(description, ".pm");
+        if (idx > 0 && (idx + 3 == description.length() || !Character.isLetterOrDigit(description.charAt(idx + 3)))) {
+            return "perl";
+        } else {
+            idx = StringUtils.indexOfIgnoreCase(description, ".pl");
+            if (idx > 0 && (idx + 3 == description.length() || !Character.isLetterOrDigit(description.charAt(idx + 3)))) {
+                return "perl";
+            }
+        }
+        idx = StringUtils.indexOfIgnoreCase(description, ".java");
+        if (idx > 0 && (idx + 5 == description.length() || !Character.isLetterOrDigit(description.charAt(idx + 5)))) {
+            return JarAnalyzer.DEPENDENCY_ECOSYSTEM;
+        } else {
+            idx = StringUtils.indexOfIgnoreCase(description, ".jsp");
+            if (idx > 0 && (idx + 4 == description.length() || !Character.isLetterOrDigit(description.charAt(idx + 4)))) {
+                return JarAnalyzer.DEPENDENCY_ECOSYSTEM;
+            }
+        }
+        if (StringUtils.containsIgnoreCase(description, " grails ")) {
+            return JarAnalyzer.DEPENDENCY_ECOSYSTEM;
+        }
+
+        idx = StringUtils.indexOfIgnoreCase(description, ".rb");
+        if (idx > 0 && (idx + 3 == description.length() || !Character.isLetterOrDigit(description.charAt(idx + 3)))) {
+            return RubyBundleAuditAnalyzer.DEPENDENCY_ECOSYSTEM;
+        }
+        if (StringUtils.containsIgnoreCase(description, "ruby gem")) {
+            return RubyBundleAuditAnalyzer.DEPENDENCY_ECOSYSTEM;
+        }
+
+        idx = StringUtils.indexOfIgnoreCase(description, ".py");
+        if (idx > 0 && (idx + 3 == description.length() || !Character.isLetterOrDigit(description.charAt(idx + 3)))
+                || StringUtils.containsIgnoreCase(description, "django")) {
+            return PythonPackageAnalyzer.DEPENDENCY_ECOSYSTEM;
+        }
+
+        if (StringUtils.containsIgnoreCase(description, "buffer overflow")
+                && !StringUtils.containsIgnoreCase(description, "android")) {
+            return CMakeAnalyzer.DEPENDENCY_ECOSYSTEM;
+        }
+        idx = StringUtils.indexOfIgnoreCase(description, ".c");
+        if (idx > 0 && (idx + 2 == description.length() || !Character.isLetterOrDigit(description.charAt(idx + 2)))) {
+            return CMakeAnalyzer.DEPENDENCY_ECOSYSTEM;
+        } else {
+            idx = StringUtils.indexOfIgnoreCase(description, ".cpp");
+            if (idx > 0 && (idx + 4 == description.length() || !Character.isLetterOrDigit(description.charAt(idx + 4)))) {
+                return CMakeAnalyzer.DEPENDENCY_ECOSYSTEM;
+            } else {
+                idx = StringUtils.indexOfIgnoreCase(description, ".h");
+                if (idx > 0 && (idx + 2 == description.length() || !Character.isLetterOrDigit(description.charAt(idx + 2)))) {
+                    return CMakeAnalyzer.DEPENDENCY_ECOSYSTEM;
+                }
+            }
+        }
+        return null;
+    }
+
+    private String determineEcosystem(String baseEcosystem, String vendor, String product, String targetSw) {
+        if ("ibm".equals(vendor) && "java".equals(product)) {
+            return "c/c++";
+        }
+        if ("oracle".equals(vendor) && "vm".equals(product)) {
+            return "c/c++";
+        }
+        if ("*".equals(targetSw) || baseEcosystem != null) {
+            return baseEcosystem;
+        }
+        return targetSw;
+    }
+
     /**
      * The enum value names must match the keys of the statements in the
      * statement bundles "dbStatements*.properties".
@@ -121,6 +217,10 @@ public final class CveDB implements AutoCloseable {
          * Key for SQL Statement.
          */
         CLEANUP_ORPHANS,
+        /**
+         * Key for update ecosystem.
+         */
+        UPDATE_ECOSYSTEM,
         /**
          * Key for SQL Statement.
          */
@@ -456,19 +556,19 @@ public final class CveDB implements AutoCloseable {
      * analyzed
      * @return a set of vulnerable software
      */
-    public synchronized Set<Cpe> getCPEs(String vendor, String product) {
-        final Set<Cpe> cpe = new HashSet<>();
+    public synchronized Set<CpePlus> getCPEs(String vendor, String product) {
+        final Set<CpePlus> cpe = new HashSet<>();
         ResultSet rs = null;
         try {
             final PreparedStatement ps = getPreparedStatement(SELECT_CPE_ENTRIES);
             //part, vendor, product, version, update_version, edition,
-            //lang, sw_edition, target_sw, target_hw, other
+            //lang, sw_edition, target_sw, target_hw, other, ecosystem
             ps.setString(1, vendor);
             ps.setString(2, product);
             rs = ps.executeQuery();
             final CpeBuilder builder = new CpeBuilder();
             while (rs.next()) {
-                final Cpe vs = builder
+                final Cpe entry = builder
                         .part(rs.getString(1))
                         .vendor(rs.getString(2))
                         .product(rs.getString(3))
@@ -480,7 +580,8 @@ public final class CveDB implements AutoCloseable {
                         .targetSw(rs.getString(9))
                         .targetHw(rs.getString(10))
                         .other((rs.getString(11))).build();
-                cpe.add(vs);
+                final CpePlus plus = new CpePlus(entry, rs.getString(12));
+                cpe.add(plus);
             }
         } catch (SQLException | CpeParsingException | CpeValidationException ex) {
             LOGGER.error("An unexpected SQL Exception occurred; please see the verbose log for more details.");
@@ -612,7 +713,11 @@ public final class CveDB implements AutoCloseable {
             final Set<VulnerableSoftware> vulnSoftware = new HashSet<>();
             while (rs.next()) {
                 final String cveId = rs.getString(1);
-                if (!currentCVE.equals(cveId)) { //check for match and add
+                if (currentCVE.isEmpty()) {
+                    //first loop we don't have the cveId
+                    currentCVE = cveId;
+                }
+                if (!vulnSoftware.isEmpty() && !currentCVE.equals(cveId)) { //check for match and add
                     final VulnerableSoftware matchedCPE = getMatchingSoftware(cpe, vulnSoftware);
                     if (matchedCPE != null) {
                         final Vulnerability v = getVulnerability(currentCVE);
@@ -776,11 +881,11 @@ public final class CveDB implements AutoCloseable {
 
             if (vulnerabilityId != 0) {
                 //TODO what about cve.getCve().getCVEDataMeta().getSTATE()
-                if (description.contains("** REJECT **")) {
-                    updateVulnerabilityDeleteVulnerability(vulnerabilityId);
-                } else {
+//                if (description.contains("** REJECT **")) {
+//                    updateVulnerabilityDeleteVulnerability(vulnerabilityId);
+//                } else {
                     updateVulnerabilityUpdateVulnerability(vulnerabilityId, cve, description);
-                }
+//                }
             } else {
                 vulnerabilityId = updateVulnerabilityInsertVulnerability(cve, description);
             }
@@ -792,10 +897,16 @@ public final class CveDB implements AutoCloseable {
             //parse the CPEs outside of a synchronized method
             final List<VulnerableSoftware> software = parseCpes(cve);
 
-            updateVulnerabilityInsertSoftware(vulnerabilityId, cveId, software);
+            final String baseEcosystem = determineBaseEcosystem(description);
+
+            updateVulnerabilityInsertSoftware(vulnerabilityId, cveId, software, baseEcosystem);
 
         } catch (SQLException ex) {
             final String msg = String.format("Error updating '%s'", cveId);
+            LOGGER.debug(msg, ex);
+            throw new DatabaseException(msg, ex);
+        } catch (CpeValidationException ex) {
+            final String msg = String.format("Error parsing CPE entry from '%s'", cveId);
             LOGGER.debug(msg, ex);
             throw new DatabaseException(msg, ex);
         }
@@ -1027,10 +1138,13 @@ public final class CveDB implements AutoCloseable {
      * @param vulnerabilityId the vulnerability id
      * @param cveId the CVE ID - used for reporting
      * @param software the list of vulnerable software
+     * @param baseEcosystem the ecosystem based off of the vulnerability
+     * description
      * @throws DatabaseException thrown if there is an error inserting the data
      * @throws SQLException thrown if there is an error inserting the data
      */
-    private synchronized void updateVulnerabilityInsertSoftware(int vulnerabilityId, String cveId, List<VulnerableSoftware> software)
+    private synchronized void updateVulnerabilityInsertSoftware(int vulnerabilityId, String cveId,
+            List<VulnerableSoftware> software, String baseEcosystem)
             throws DatabaseException, SQLException {
         try (PreparedStatement insertCpe = prepareStatement(INSERT_CPE);
                 PreparedStatement selectCpeId = prepareStatement(SELECT_CPE_ID);
@@ -1067,6 +1181,10 @@ public final class CveDB implements AutoCloseable {
                     insertCpe.setString(9, parsedCpe.getTargetSw());
                     insertCpe.setString(10, parsedCpe.getTargetHw());
                     insertCpe.setString(11, parsedCpe.getOther());
+                    String ecosystem = determineEcosystem(baseEcosystem, parsedCpe.getVendor(),
+                            parsedCpe.getProduct(), parsedCpe.getTargetSw());
+                    addNullableStringParameter(insertCpe, 12, ecosystem);
+
                     insertCpe.executeUpdate();
                     cpeProductId = DBUtils.getGeneratedKey(insertCpe);
                 }
@@ -1148,35 +1266,36 @@ public final class CveDB implements AutoCloseable {
      * @param cve the CVE to parse the vulnerable software entries from
      * @return the list of vulnerable software
      */
-    private List<VulnerableSoftware> parseCpes(CVEItem cve) {
+    private List<VulnerableSoftware> parseCpes(CVEItem cve) throws CpeValidationException {
         final List<VulnerableSoftware> software = new ArrayList<>();
         final List<CpeMatch> cpeEntries = cve.getConfigurations().getNodes().stream()
                 .collect(new NodeFlatteningCollector())
                 .collect(new CpeMatchStreamCollector())
                 .filter(predicate -> predicate.getCpe23Uri().startsWith(cpeStartsWithFilter))
+                //this single CPE entry causes nearly 100% FP - so filtering it at the source.
+                .filter(entry -> !("CVE-2009-0754".equals(cve.getCve().getCVEDataMeta().getID())
+                && "cpe:2.3:a:apache:apache:*:*:*:*:*:*:*:*".equals(entry.getCpe23Uri())))
                 .collect(Collectors.toList());
         final VulnerableSoftwareBuilder builder = new VulnerableSoftwareBuilder();
 
-        for (CpeMatch item : cpeEntries) {
-            final Cpe cpe = parseCpe(item, cve.getCve().getCVEDataMeta().getID());
-
-            builder.part(cpe.getPart()).wfVendor(cpe.getWellFormedVendor()).wfProduct(cpe.getWellFormedProduct())
-                    .wfVersion(cpe.getWellFormedVersion()).wfUpdate(cpe.getWellFormedUpdate())
-                    .wfEdition(cpe.getWellFormedEdition()).wfLanguage(cpe.getWellFormedLanguage())
-                    .wfSwEdition(cpe.getWellFormedSwEdition()).wfTargetSw(cpe.getWellFormedTargetSw())
-                    .wfTargetHw(cpe.getWellFormedTargetHw()).wfOther(cpe.getWellFormedOther())
-                    .versionEndExcluding(item.getVersionEndExcluding())
-                    .versionStartExcluding(item.getVersionStartExcluding())
-                    .versionEndIncluding(item.getVersionEndIncluding())
-                    .versionStartIncluding(item.getVersionStartIncluding())
-                    .vulnerable(item.getVulnerable());
-            try {
-                software.add(builder.build());
-            } catch (CpeValidationException ex) {
-                throw new RuntimeException(ex);
-            }
+        try {
+            cpeEntries.stream()
+                    .forEach(entry -> {
+                        builder.cpe(parseCpe(entry, cve.getCve().getCVEDataMeta().getID()))
+                                .versionEndExcluding(entry.getVersionEndExcluding())
+                                .versionStartExcluding(entry.getVersionStartExcluding())
+                                .versionEndIncluding(entry.getVersionEndIncluding())
+                                .versionStartIncluding(entry.getVersionStartIncluding())
+                                .vulnerable(entry.getVulnerable());
+                        try {
+                            software.add(builder.build());
+                        } catch (CpeValidationException ex) {
+                            throw new LambdaExceptionWrapper(ex);
+                        }
+                    });
+        } catch (LambdaExceptionWrapper ex) {
+            throw (CpeValidationException) ex.getCause();
         }
-
         return software;
     }
 
@@ -1316,10 +1435,13 @@ public final class CveDB implements AutoCloseable {
      */
     public synchronized void cleanupDatabase() {
         clearCache();
-        try {
-            final PreparedStatement ps = getPreparedStatement(CLEANUP_ORPHANS);
-            if (ps != null) {
-                ps.executeUpdate();
+        try (PreparedStatement psOrphans = getPreparedStatement(CLEANUP_ORPHANS);
+                PreparedStatement psEcosystem = getPreparedStatement(UPDATE_ECOSYSTEM)) {
+            if (psEcosystem != null) {
+                psEcosystem.executeUpdate();
+            }
+            if (psOrphans != null) {
+                psOrphans.executeUpdate();
             }
         } catch (SQLException ex) {
             LOGGER.error("An unexpected SQL Exception occurred; please see the verbose log for more details.");
@@ -1338,16 +1460,20 @@ public final class CveDB implements AutoCloseable {
      * @return true if the identified version is affected, otherwise false
      */
     protected VulnerableSoftware getMatchingSoftware(Cpe cpe, Set<VulnerableSoftware> vulnerableSoftware) {
-
-        final boolean isVersionTwoADifferentProduct = "apache".equals(cpe.getVendor()) && "struts".equals(cpe.getProduct());
-
+        VulnerableSoftware matched = null;
         for (VulnerableSoftware vs : vulnerableSoftware) {
-            if (vs.matches(cpe)) {
-                return vs;
+            if (vs.matchedBy(cpe)) {
+                if (matched == null) {
+                   matched = vs; 
+                } else {
+                    if ("*".equals(vs.getWellFormedUpdate()) && !"*".equals(matched.getWellFormedUpdate())) {
+                        matched = vs;
+                    }
+                }
             }
         }
-        return null;
-
+        return matched;
+//        final boolean isVersionTwoADifferentProduct = "apache".equals(cpe.getVendor()) && "struts".equals(cpe.getProduct());
 //        final Set<String> majorVersionsAffectingAllPrevious = new HashSet<>();
 //        final boolean matchesAnyPrevious = identifiedVersion == null || "-".equals(identifiedVersion.toString());
 //        String majorVersionMatch = null;

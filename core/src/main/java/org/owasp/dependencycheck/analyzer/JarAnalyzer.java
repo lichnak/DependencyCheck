@@ -146,6 +146,7 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
             "embed-dependency",
             "ipojo-components",
             "ipojo-extension",
+            "plugin-dependencies",
             "eclipse-sourcereferences");
     /**
      * Deprecated Jar manifest attribute, that is, nonetheless, useful for
@@ -302,15 +303,15 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
     }
 
     /**
-     * Checks if the given dependency appears to be a macOS metadata file,
+     * Checks if the given dependency appears to be a macOS meta-data file,
      * returning true if its filename starts with a ._ prefix and if there is
      * another dependency with the same filename minus the ._ prefix, otherwise
      * it returns false.
      *
-     * @param dependency the dependency to check if it's a macOS metadata file
+     * @param dependency the dependency to check if it's a macOS meta-data file
      * @param engine the engine that is scanning the dependencies
      * @return whether or not the given dependency appears to be a macOS
-     * metadata file
+     * meta-data file
      */
     private boolean isMacOSMetaDataFile(final Dependency dependency, final Engine engine) {
         final String fileName = Paths.get(dependency.getActualFilePath()).getFileName().toString();
@@ -375,34 +376,21 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
      * @return whether or not evidence was added to the dependency
      */
     protected boolean analyzePOM(Dependency dependency, List<ClassNameInformation> classes, Engine engine) throws AnalysisException {
+
+        //TODO add breakpoint on groov-all to find out why commons-cli is not added as a new dependency?
+        boolean evidenceAdded = false;
         try (JarFile jar = new JarFile(dependency.getActualFilePath())) {
-            final List<String> pomEntries = retrievePomListing(jar);
-            if (pomEntries != null && pomEntries.size() <= 1) {
-                final String path;
-                final File pomFile;
-                Properties pomProperties = null;
-                if (pomEntries.size() == 1) {
-                    path = pomEntries.get(0);
-                    pomFile = extractPom(path, jar);
-                    pomProperties = retrievePomProperties(path, jar);
-                } else {
-                    path = FilenameUtils.removeExtension(dependency.getActualFilePath()) + ".pom";
-                    pomFile = new File(path);
-                }
-                if (pomFile.isFile()) {
-                    final Model pom = PomUtils.readPom(pomFile);
-                    if (pom != null && pomProperties != null) {
-                        pom.processProperties(pomProperties);
-                    }
-                    return pom != null && setPomEvidence(dependency, pom, classes);
-                } else {
-                    return false;
-                }
+            //check if we are scanning in a repo directory - so the pom is adjacent to the jar
+            String repoPomName = FilenameUtils.removeExtension(dependency.getActualFilePath()) + ".pom";
+            File repoPom = new File(repoPomName);
+            if (repoPom.isFile()) {
+                final Model pom = PomUtils.readPom(repoPom);
+                evidenceAdded |= setPomEvidence(dependency, pom, classes, true);
             }
 
-            //reported possible null dereference on pomEntries is on a non-feasible path
+            final List<String> pomEntries = retrievePomListing(jar);
+
             for (String path : pomEntries) {
-                //TODO - one of these is likely the pom for the main JAR we are analyzing
                 LOGGER.debug("Reading pom entry: {}", path);
                 try {
                     //extract POM to its own directory and add it as its own dependency
@@ -411,42 +399,47 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
                     final Model pom = PomUtils.readPom(pomFile);
                     pom.processProperties(pomProperties);
 
-                    final String displayPath = String.format("%s%s%s",
-                            dependency.getFilePath(),
-                            File.separator,
-                            path);
-                    final String displayName = String.format("%s%s%s",
-                            dependency.getFileName(),
-                            File.separator,
-                            path);
-                    final Dependency newDependency = new Dependency();
-                    newDependency.setActualFilePath(pomFile.getAbsolutePath());
-                    newDependency.setFileName(displayName);
-                    newDependency.setFilePath(displayPath);
-                    newDependency.setEcosystem(DEPENDENCY_ECOSYSTEM);
-                    String groupId = pom.getGroupId();
-                    String version = pom.getVersion();
-                    if (groupId == null) {
-                        groupId = pom.getParentGroupId();
-                    }
-                    if (version == null) {
-                        version = pom.getParentVersion();
-                    }
-                    if (groupId == null) {
-                        newDependency.setName(pom.getArtifactId());
-                        newDependency.setPackagePath(String.format("%s:%s", pom.getArtifactId(), version));
+                    String artifactId = new File(path).getParentFile().getName();
+                    if (dependency.getActualFile().getName().startsWith(artifactId)) {
+                        evidenceAdded |= setPomEvidence(dependency, pom, classes, true);
                     } else {
-                        newDependency.setName(String.format("%s:%s", groupId, pom.getArtifactId()));
-                        newDependency.setPackagePath(String.format("%s:%s:%s", groupId, pom.getArtifactId(), version));
+                        final String displayPath = String.format("%s%s%s",
+                                dependency.getFilePath(),
+                                File.separator,
+                                path);
+                        final String displayName = String.format("%s%s%s",
+                                dependency.getFileName(),
+                                File.separator,
+                                path);
+                        final Dependency newDependency = new Dependency();
+                        newDependency.setActualFilePath(pomFile.getAbsolutePath());
+                        newDependency.setFileName(displayName);
+                        newDependency.setFilePath(displayPath);
+                        newDependency.setEcosystem(DEPENDENCY_ECOSYSTEM);
+                        String groupId = pom.getGroupId();
+                        String version = pom.getVersion();
+                        if (groupId == null) {
+                            groupId = pom.getParentGroupId();
+                        }
+                        if (version == null) {
+                            version = pom.getParentVersion();
+                        }
+                        if (groupId == null) {
+                            newDependency.setName(pom.getArtifactId());
+                            newDependency.setPackagePath(String.format("%s:%s", pom.getArtifactId(), version));
+                        } else {
+                            newDependency.setName(String.format("%s:%s", groupId, pom.getArtifactId()));
+                            newDependency.setPackagePath(String.format("%s:%s:%s", groupId, pom.getArtifactId(), version));
+                        }
+                        newDependency.setDisplayFileName(String.format("%s (shaded: %s)",
+                                dependency.getDisplayFileName(), newDependency.getPackagePath()));
+                        newDependency.setVersion(version);
+                        setPomEvidence(newDependency, pom, null, true);
+                        if (dependency.getProjectReferences().size() > 0) {
+                            newDependency.addAllProjectReferences(dependency.getProjectReferences());
+                        }
+                        engine.addDependency(newDependency);
                     }
-                    newDependency.setDisplayFileName(String.format("%s (shaded: %s)",
-                            dependency.getDisplayFileName(), newDependency.getPackagePath()));
-                    newDependency.setVersion(version);
-                    setPomEvidence(newDependency, pom, null);
-                    if (dependency.getProjectReferences().size() > 0) {
-                        newDependency.addAllProjectReferences(dependency.getProjectReferences());
-                    }
-                    engine.addDependency(newDependency);
                 } catch (AnalysisException ex) {
                     LOGGER.warn("An error occurred while analyzing '{}'.", dependency.getActualFilePath());
                     LOGGER.trace("", ex);
@@ -456,7 +449,7 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
             LOGGER.warn("Unable to read JarFile '{}'.", dependency.getActualFilePath());
             LOGGER.trace("", ex);
         }
-        return false;
+        return evidenceAdded;
     }
 
     /**
@@ -501,7 +494,6 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
             final String entryName = new File(entry.getName()).getName().toLowerCase();
             if (!entry.isDirectory() && "pom.xml".equals(entryName)
                     && entry.getName().toUpperCase().startsWith("META-INF")) {
-                LOGGER.trace("POM Entry found: {}", entry.getName());
                 pomEntries.add(entry.getName());
             }
         }
@@ -541,10 +533,11 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
      * @param pom the information from the pom
      * @param classes a collection of ClassNameInformation - containing data
      * about the fully qualified class names within the JAR file being analyzed
+     * @param isMainPom a flag indicating if this is the primary pom.
      * @return true if there was evidence within the pom that we could use;
      * otherwise false
      */
-    public static boolean setPomEvidence(Dependency dependency, Model pom, List<ClassNameInformation> classes) {
+    public static boolean setPomEvidence(Dependency dependency, Model pom, List<ClassNameInformation> classes, boolean isMainPom) {
         if (pom == null) {
             return false;
         }
@@ -584,6 +577,17 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
 
         if ((version == null || version.isEmpty()) && parentVersion != null && !parentVersion.isEmpty()) {
             version = parentVersion;
+        }
+
+        if (isMainPom && dependency.getName() == null && originalArtifactID != null && !originalArtifactID.isEmpty()) {
+            if (originalGroupID != null && !originalGroupID.isEmpty()) {
+                dependency.setName(String.format("%s:%s", originalGroupID, originalArtifactID));
+            } else {
+                dependency.setName(originalArtifactID);
+            }
+        }
+        if (isMainPom && dependency.getVersion() == null && version != null && !version.isEmpty()) {
+            dependency.setVersion(version);
         }
 
         if (groupid != null && !groupid.isEmpty()) {
@@ -628,7 +632,7 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
             addAsIdentifier = false;
         }
 
-        if (addAsIdentifier) {
+        if (addAsIdentifier && isMainPom) {
             Identifier id;
             try {
                 final PackageURL purl = PackageURLBuilder.aPackageURL().withType("maven").withNamespace(originalGroupID)
@@ -875,7 +879,9 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
                             addLicense(dependency, value);
                         } else if (key.contains("description")) {
                             if (!value.startsWith("Sonatype helps open source projects")) {
-                                addDescription(dependency, value, "manifest", key);
+                                final String trimmedDescription = addDescription(dependency, value, "manifest", key);
+                                addMatchingValues(classInformation, trimmedDescription, dependency, EvidenceType.VENDOR);
+                                addMatchingValues(classInformation, trimmedDescription, dependency, EvidenceType.PRODUCT);
                             }
                         } else {
                             dependency.addEvidence(EvidenceType.PRODUCT, source, key, value, Confidence.LOW);
@@ -960,6 +966,7 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
             final int posLike = desc.toLowerCase().indexOf("like ", 100);
             final int posWillUse = desc.toLowerCase().indexOf("will use ", 100);
             final int posUses = desc.toLowerCase().indexOf(" uses ", 100);
+
             int pos = -1;
             pos = Math.max(pos, posSuchAs);
             if (pos >= 0 && posLike >= 0) {
@@ -977,15 +984,16 @@ public class JarAnalyzer extends AbstractFileTypeAnalyzer {
             } else {
                 pos = Math.max(pos, posUses);
             }
-
             if (pos > 0) {
                 desc = desc.substring(0, pos) + "...";
             }
-            dependency.addEvidence(EvidenceType.PRODUCT, source, key, desc, Confidence.LOW);
-            dependency.addEvidence(EvidenceType.VENDOR, source, key, desc, Confidence.LOW);
-        } else {
-            dependency.addEvidence(EvidenceType.PRODUCT, source, key, desc, Confidence.MEDIUM);
-            dependency.addEvidence(EvidenceType.VENDOR, source, key, desc, Confidence.MEDIUM);
+//            //no longer add description directly. Use matching terms in other parts of the evidence collection
+//            //but description adds too many FP
+//            dependency.addEvidence(EvidenceType.PRODUCT, source, key, desc, Confidence.LOW);
+//            dependency.addEvidence(EvidenceType.VENDOR, source, key, desc, Confidence.LOW);
+//        } else {
+//            dependency.addEvidence(EvidenceType.PRODUCT, source, key, desc, Confidence.MEDIUM);
+//            dependency.addEvidence(EvidenceType.VENDOR, source, key, desc, Confidence.MEDIUM);
         }
         return desc;
     }
